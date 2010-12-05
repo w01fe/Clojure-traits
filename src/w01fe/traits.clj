@@ -1,6 +1,16 @@
-(ns edu.berkeley.ai.util.traits
-  (:require [edu.berkeley.ai.util :as util]))
+(ns w01fe.traits)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Utilities ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn map-vals [f m]
+  (into {} (map (fn [[k v]] [k (f v)]) m)))
+
+(defn merge-disjoint [m1 m2]
+  (let [ret (merge m1 m2)]
+    (assert (= (count ret) (+ (count m1) (count m2))))
+    ret))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Helpers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn- parse-protocols-and-method-pairs [args]
   (when (seq args)
@@ -11,7 +21,6 @@
             (parse-protocols-and-method-pairs more)))))
 
 (defn rewrite-pm-pair [ns args [proto method]]
-;  (println ns args proto method)
   (let [method-name    (first method)
         method-args    (second method)
         method-body    (next (next method))
@@ -32,27 +41,45 @@
         pm-triples       (map #(rewrite-pm-pair ns args %) pm-pairs)]
     (assert (apply distinct? (cons nil (map first methods-by-proto))))
     [(map #(nth % 2) pm-triples)
-     (util/map-vals #(map second %) (group-by first pm-triples))]))
+     (map-vals #(map second %) (group-by first pm-triples))]))
 
 (defn merge-traits [& traits]
   (let [bindings  (vec (apply concat (map first traits)))]
     (assert (apply distinct? (cons nil (take-nth 2 bindings))))
     [bindings
-     (reduce util/merge-disjoint {} (map second traits))]))
+     (reduce merge-disjoint {} (map second traits))]))
 
 ;; To allow traits to be used from other namespaces, easiest option is to emit named fns in defining ns ?
-
-(defn parse-trait-form [traits]
+(defn- parse-trait-form [traits]
   (vec (map #(if (list? %)
                (cons (first %) (map (fn [x] `'~x) (rest %)))
                (list %)) traits)))
 
+(defn- render-trait-methods-inline [trait-map]
+  (apply concat (map (partial apply cons) trait-map)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;; Public Interface ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; Internal rep. of a trait is a fn from args to [binding-seq impl-map]
-;; TODO: forn ow, args may be multiple evaluated?
-(defmacro deftrait [name args state-bindings child-traits & protocols-and-methods]
+;; TODO: for now, args may be multiple evaluated?
+(defmacro deftrait
+  "Define a new trait with the given name. Traits are essentially bundles of
+   protocol implementaitons, which can include arguments, local state, and
+   inheritance.  Objects using the defined trait(s) are created using
+   reify-traits.
+
+   args is a list of trait argument bindings, like a defn arglist.
+   state-bindings is a set of further bindings, like a 'let', which
+     can create local state via reference types, and refer to the args.
+   child-traits is a vector of child traits, which are (name & args)
+     calls, or bare names for no-arg traits.
+   protocols-and-methods are a set of protocols and methods to implement,
+     as in defrecord or reify, which can refer to args and state-bindings."
+
+  [name args state-bindings child-traits & protocols-and-methods]
   (let [[method-fn-defs protocol-method-bodies]
         (parse-protocols-and-methods (concat args (take-nth 2 state-bindings)) protocols-and-methods)]
-;    (println method-fn-defs "\n" protocol-method-bodies)
     `(do (defn ~name ~args
            (apply merge-traits
                   [(concat (interleave '~args ~args) '~state-bindings)
@@ -60,10 +87,11 @@
                   ~(parse-trait-form child-traits)))
          ~@method-fn-defs)))
 
-(defn- render-trait-methods-inline [trait-map]
-  (apply concat (map (partial apply cons) trait-map)))
-
-(defmacro reify-traits [[& traits] & specs]
+(defmacro reify-traits
+  "Reify a new object that includes the named traits, plus (optional)
+   additional protocols and method implementations as in ordinary reify.
+   Traits can be raw names (for 0-arg traits), or (name & args) calls."
+  [[& traits] & specs]
   (let [[trait-bindings trait-methods] (apply merge-traits (eval (parse-trait-form traits)))]
     `(let ~trait-bindings
        (reify
@@ -71,20 +99,4 @@
         ~@specs))))
 
 
-(do #_comment         
-
- (defprotocol P2
-   (p21 [x y])
-   (p22 [x]))
-
-
- (defprotocol P1
-   (p11 [x y]))
-
- (defprotocol P0)
-
- (deftrait +foo+ [x] [y (atom x)] [] P2 (p21 [foo z] (+ z @y)) (p22 [foo] (swap! y inc)) P0)
-
-                                        ; (deftrait +bar+ [w] [z (inc w)] [(+foo+ (* w 2))] P1 (p11 [bar y] (- y w)))
- )
 
