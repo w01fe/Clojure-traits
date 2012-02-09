@@ -1,5 +1,5 @@
 (ns example
-  (:use [w01fe.traits :as traits]))
+  (:require [w01fe.traits :as traits]))
 
 (defprotocol Counter
   (inc! [c x] "Increment count and return old value"))
