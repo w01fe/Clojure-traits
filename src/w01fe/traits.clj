@@ -20,27 +20,35 @@
       (cons [proto methods]
             (parse-protocols-and-method-pairs more)))))
 
-(defn rewrite-pm-pair [ns args [proto method]]
+(defn qualify-symbol [s]
+  (symbol
+   (name (ns-name (if-let [n (namespace s)]
+                    (or (find-ns (symbol n))
+                        (doto (get (ns-aliases *ns*) (symbol n)) assert))
+                   *ns*)))
+   (name s)))
+
+
+(defn rewrite-pm-pair [trait-name args [proto method]]
   (let [method-name    (first method)
         method-args    (second method)
         method-body    (next (next method))
         all-args       (vec (concat method-args args))
-        fn-name        (gensym (str proto "-" method-name))
-        scoped-fn-name (symbol ns (name fn-name))]
+        fn-name        (gensym (str trait-name "-" (name proto) "-" method-name))
+        scoped-fn-name (symbol (name (ns-name *ns*)) (name fn-name))]
     (assert (apply distinct? (cons nil all-args)))
-    [(symbol ns (name proto))
+    [(qualify-symbol proto)
      `(~method-name ~method-args (~scoped-fn-name ~@all-args))
      `(defn ~fn-name ~all-args (loop ~(vec (interleave (next method-args) (next method-args))) ~@method-body))]))
 ;; Loop allows proper recur semantics ...
 
-(defn- parse-protocols-and-methods [args specs]
+(defn- parse-protocols-and-methods [trait-name args specs]
   (let [methods-by-proto (parse-protocols-and-method-pairs specs)
-        ns               (name (ns-name *ns*))
         pm-pairs         (for [[p ms] methods-by-proto, m ms] [p m])
 ;        _ (println pm-pairs)
-        pm-triples       (map #(rewrite-pm-pair ns args %) pm-pairs)]
+        pm-triples       (map #(rewrite-pm-pair trait-name args %) pm-pairs)]
     (assert (apply distinct? (cons nil (map first methods-by-proto))))
-    [(map #(nth % 2) pm-triples)
+    [(doall (map #(nth % 2) pm-triples))
      (map-vals #(map second %) (group-by first pm-triples))]))
 
 (defn merge-traits [& traits]
@@ -50,7 +58,7 @@
      (reduce merge-disjoint {} (map second traits))]))
 
 ;; To allow traits to be used from other namespaces, easiest option is to emit named fns in defining ns ?
-(defn- parse-trait-form [traits]
+(defn parse-trait-form [traits]
   (vec (map #(if (list? %)
                (cons (first %) (map (fn [x] `'~x) (rest %)))
                (list %)) traits)))
@@ -79,7 +87,7 @@
 
   [name args state-bindings child-traits & protocols-and-methods]
   (let [[method-fn-defs protocol-method-bodies]
-        (parse-protocols-and-methods (concat args (take-nth 2 state-bindings)) protocols-and-methods)]
+        (parse-protocols-and-methods name (concat args (take-nth 2 state-bindings)) protocols-and-methods)]
     `(do (defn ~name ~args
            (apply merge-traits
                   [(concat (interleave '~args ~args) '~state-bindings)
